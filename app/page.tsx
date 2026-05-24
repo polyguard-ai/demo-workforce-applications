@@ -1,7 +1,54 @@
 import { JobApplicationForm } from '@/components/JobApplicationForm';
+import { fetchJotformHtml } from '@/lib/fetch-jotform';
 
-export default function Page() {
+export default async function Page() {
   const jotformId = process.env.NEXT_PUBLIC_JOTFORM_ID ?? '';
+
+  let body: React.ReactNode;
+  if (!jotformId) {
+    body = (
+      <SetupNotice
+        title="No Jotform ID configured."
+        detail={
+          <>
+            Set <code>NEXT_PUBLIC_JOTFORM_ID</code> in <code>.env.local</code> to
+            the form ID of your Jotform job application. See <code>README.md</code>
+            for how to build the form.
+          </>
+        }
+      />
+    );
+  } else {
+    let formHtml: string | null = null;
+    let fetchError: string | null = null;
+    try {
+      formHtml = await fetchJotformHtml(jotformId);
+    } catch (err) {
+      fetchError = err instanceof Error ? err.message : 'Unknown error';
+    }
+
+    if (fetchError) {
+      body = (
+        <SetupNotice
+          title="Could not load the application form from Jotform."
+          detail={<code className="text-xs">{fetchError}</code>}
+        />
+      );
+    } else if (!formHtml) {
+      body = (
+        <SetupNotice
+          title={`Jotform form ${jotformId} not found or unpublished.`}
+          detail={
+            <>
+              Double-check the form ID and make sure the form is published.
+            </>
+          }
+        />
+      );
+    } else {
+      body = <JobApplicationForm formHtml={formHtml} />;
+    }
+  }
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-12">
@@ -19,7 +66,7 @@ export default function Page() {
         </p>
       </header>
 
-      <JobApplicationForm jotformId={jotformId} />
+      {body}
 
       <footer className="mt-12 text-xs text-slate-500">
         <p>
@@ -28,5 +75,20 @@ export default function Page() {
         </p>
       </footer>
     </main>
+  );
+}
+
+function SetupNotice({
+  title,
+  detail,
+}: {
+  title: string;
+  detail: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-lg border border-amber-300 bg-amber-50 p-6 text-sm text-amber-900">
+      <p className="font-medium">{title}</p>
+      <p className="mt-2">{detail}</p>
+    </div>
   );
 }

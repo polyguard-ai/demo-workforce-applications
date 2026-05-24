@@ -13,7 +13,7 @@ type Phase =
   | { name: 'failed'; reason: string };
 
 type Props = {
-  iframeRef: RefObject<HTMLIFrameElement | null>;
+  formContainerRef: RefObject<HTMLDivElement | null>;
   onSubmitted: () => void;
 };
 
@@ -27,11 +27,11 @@ const POLL_TIMEOUT_MS = 30_000;
  *     ↓ click
  *   verifying            — Polyguard SDK modal is open
  *     ↓ resolve
- *   awaiting-webhook     — verify resolved, wait for the decrypted webhook
- *                          to land in /api/status/{linkUuid}
- *     ↓ webhook says Pass
- *   submitting           — postMessage to the Jotform iframe: set the
- *                          hidden polyguard_jwt field and submit
+ *   awaiting-webhook     — verify resolved; wait for the decrypted webhook
+ *                          to arrive at /api/status/{linkUuid}
+ *     ↓ webhook says trust_check.completed
+ *   submitting           — set the form's hidden polyguard_jwt input,
+ *                          POST FormData to Jotform's submission endpoint
  *     ↓ done
  *   (parent shows the success screen)
  *
@@ -39,10 +39,16 @@ const POLL_TIMEOUT_MS = 30_000;
  * timeout) routes to `failed`, which renders a "Try again" button that
  * resets to `idle`.
  */
-export function PolyguardSubmitButton({ iframeRef, onSubmitted }: Props) {
+export function PolyguardSubmitButton({ formContainerRef, onSubmitted }: Props) {
   const [phase, setPhase] = useState<Phase>({ name: 'idle' });
 
   async function handleClick() {
+    const form = findForm(formContainerRef.current);
+    if (!form) {
+      setPhase({ name: 'failed', reason: 'Application form is not ready' });
+      return;
+    }
+
     setPhase({ name: 'verifying' });
     let linkUuid: string;
     let rawJwt: string;
@@ -80,15 +86,27 @@ export function PolyguardSubmitButton({ iframeRef, onSubmitted }: Props) {
     }
 
     setPhase({ name: 'submitting' });
-    const iframe = iframeRef.current;
-    if (!iframe?.contentWindow) {
-      setPhase({ name: 'failed', reason: 'Application form is not ready' });
+    const jwtInput = findPolyguardJwtInput(form);
+    if (!jwtInput) {
+      setPhase({
+        name: 'failed',
+        reason: 'Form is missing a polyguard_jwt field. See README for setup.',
+      });
       return;
     }
-    iframe.contentWindow.postMessage(
-      { type: 'polyguard-submit', polyguard_jwt: rawJwt },
-      '*',
-    );
+    jwtInput.value = rawJwt;
+
+    try {
+      const fd = new FormData(form);
+      // Jotform's submission endpoint doesn't return permissive CORS
+      // headers, so we submit with no-cors and trust the network.
+      await fetch(form.action, { method: 'POST', body: fd, mode: 'no-cors' });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : 'Submission failed';
+      setPhase({ name: 'failed', reason });
+      return;
+    }
+
     onSubmitted();
   }
 
@@ -129,6 +147,27 @@ export function PolyguardSubmitButton({ iframeRef, onSubmitted }: Props) {
     >
       {label}
     </button>
+  );
+}
+
+function findForm(container: HTMLElement | null): HTMLFormElement | null {
+  if (!container) return null;
+  return (
+    container.querySelector<HTMLFormElement>('form.jotform-form') ??
+    container.querySelector<HTMLFormElement>('form')
+  );
+}
+
+/**
+ * Jotform names each input `q<QID>_<uniqueName>`. The unique name we ask
+ * the demo operator to set is `polyguard_jwt` (or `polyguardJwt` — Jotform
+ * sometimes camel-cases). Match on a substring so either works.
+ */
+function findPolyguardJwtInput(form: HTMLFormElement): HTMLInputElement | null {
+  return (
+    form.querySelector<HTMLInputElement>('input[name*="polyguard_jwt" i]') ??
+    form.querySelector<HTMLInputElement>('input[name*="polyguardJwt" i]') ??
+    form.querySelector<HTMLInputElement>('input[name*="polyguard" i]')
   );
 }
 

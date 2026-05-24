@@ -18,25 +18,29 @@ candidate fills Jotform           Polyguard modal opens          webhook lands
 clicks Submit with Polyguard  ──→  candidate verifies on   ──→  decrypted payload
                                     their phone                  stored by link_uuid
                                                                        ↓
-                                                          page posts a postMessage
-                                                          to the iframe with the
-                                                          raw JWT → form submits
+                                                          page sets polyguard_jwt
+                                                          on the form and POSTs it
+                                                          to Jotform.
 ```
 
-1. The page embeds your Jotform form as an iframe. The form's native
-   submit is hidden; the only path to submission is the page-level
-   **"Submit with Polyguard"** button.
-2. Clicking the button opens the Polyguard SDK modal. The candidate
+1. The page fetches your Jotform via Jotform's JS Embed endpoint
+   (`/jsform/<FORM_ID>`) server-side, evaluates the script in a sandbox,
+   and renders the resulting HTML inline. The form lives same-origin in
+   our DOM — **no iframe**, so no cross-origin restrictions to work
+   around and **nothing to paste inside Jotform**.
+2. Jotform's native submit button is hidden on mount. The only path to
+   submission is the page-level **"Submit with Polyguard"** button.
+3. Clicking the button opens the Polyguard SDK modal. The candidate
    completes a Trust Check on their phone (face + document + region +
    on-device attestation — biometric data never leaves their device).
-3. The SDK resolves with a verification bundle. The page then polls
+4. The SDK resolves with a verification bundle. The page polls
    `/api/status/{linkUuid}` until the matching encrypted webhook lands on
    `/api/webhook` and is decrypted server-side.
-4. If the webhook says `trust_check.completed`, the page sends the raw
-   JWT to the Jotform iframe via `postMessage`. The form's injected
-   Custom Code receives the message, stuffs the JWT into a hidden field
-   named `polyguard_jwt`, and submits.
-5. If verification fails, is cancelled, or the webhook times out, the
+5. If the webhook says `trust_check.completed`, the page sets the raw
+   JWT on the form's `polyguard_jwt` input, builds `FormData` from the
+   form, and POSTs it to Jotform's submission endpoint. The submission
+   appears in your Jotform Inbox exactly as a native submission would.
+6. If verification fails, is cancelled, or the webhook times out, the
    button resets so the candidate can try again. No partial submission
    ever reaches Jotform.
 
@@ -54,29 +58,17 @@ clicks Submit with Polyguard  ──→  candidate verifies on   ──→  decr
 ## Configure your Jotform
 
 1. Build your job application in Jotform.
-2. Add a **Short Text** field, label it `polyguard_jwt`, and in
-   *Properties → Advanced* set its **Unique Name** to `polyguard_jwt`.
-   Mark it Hidden.
-3. Hide the native submit. Either delete it (the form will submit
-   programmatically) or hide via *Conditions*.
-4. In *Settings → Form Tags / Inject Custom CSS or JavaScript*, paste:
-
-   ```javascript
-   window.addEventListener('message', function (e) {
-     if (!e.data || e.data.type !== 'polyguard-submit') return;
-     var input = document.querySelector('input[name="q_polyguard_jwt"]')
-       || document.querySelector('input[name*="polyguard_jwt"]');
-     if (input) input.value = e.data.polyguard_jwt;
-     var form = document.querySelector('form.jotform-form');
-     if (form) form.submit();
-   });
-   ```
-
-   The exact `name` attribute Jotform generates depends on the field's
-   QID — open the form, inspect the hidden input, and use that selector.
-5. Copy the form ID from your Jotform URL
+2. Add a **Short Text** field. In *Properties → Advanced* set its
+   **Unique Name** to `polyguard_jwt`. Mark it Hidden (so candidates
+   never see it).
+3. Publish the form.
+4. Copy the form ID from your Jotform URL
    (`https://www.jotform.com/build/<FORM_ID>` → that's your form ID) and
    set it as `NEXT_PUBLIC_JOTFORM_ID` in `.env.local`.
+
+That's it — no Custom Code, no Custom CSS, no Conditions. The page hides
+Jotform's native submit button at runtime and submits the form on your
+behalf once the Trust Check passes.
 
 ## Local development
 
@@ -118,14 +110,15 @@ variables above, and point your Polyguard webhook at
 app/
   api/webhook/route.ts            Polyguard webhook receiver (AES-256-GCM)
   api/status/[linkUuid]/route.ts  Client poll endpoint
-  layout.tsx, page.tsx            Application page
+  layout.tsx, page.tsx            Application page (fetches Jotform HTML)
 components/
-  JobApplicationForm.tsx          Jotform iframe + submit button
-  PolyguardSubmitButton.tsx       verify → poll → postMessage → submit
+  JobApplicationForm.tsx          Inline Jotform host + submit button
+  PolyguardSubmitButton.tsx       verify → poll → set JWT → POST to Jotform
 lib/
   polyguard.ts                    SDK config + required proofs
   load-polyguard.ts               dynamic import of @polyguard/sdk
   run-polyguard-verify.ts         imperative wrapper around client.verify()
+  fetch-jotform.ts                server-side jsform fetch + sandbox eval
   webhook-crypto.ts               envelope decrypt + replay window
   webhook-store.ts                Upstash Redis with in-memory fallback
 ```
