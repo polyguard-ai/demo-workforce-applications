@@ -7,8 +7,9 @@ import {
 
 type Phase =
   | { name: 'idle' }
+  | { name: 'needs-fields'; missingLabel: string }
   | { name: 'verifying' }
-  | { name: 'awaiting-webhook'; linkUuid: string; rawJwt: string }
+  | { name: 'awaiting-webhook'; linkUuid: string; rawJwt: string | null }
   | { name: 'submitting' }
   | { name: 'failed'; reason: string };
 
@@ -49,9 +50,19 @@ export function PolyguardSubmitButton({ formContainerRef, onSubmitted }: Props) 
       return;
     }
 
+    const missing = findFirstMissingRequiredField(form);
+    if (missing) {
+      missing.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if ('focus' in missing.element) {
+        try { (missing.element as HTMLElement).focus({ preventScroll: true }); } catch {}
+      }
+      setPhase({ name: 'needs-fields', missingLabel: missing.label });
+      return;
+    }
+
     setPhase({ name: 'verifying' });
     let linkUuid: string;
-    let rawJwt: string;
+    let rawJwt: string | null;
     try {
       const result = await runPolyguardVerify();
       linkUuid = result.linkUuid;
@@ -94,7 +105,11 @@ export function PolyguardSubmitButton({ formContainerRef, onSubmitted }: Props) 
       });
       return;
     }
-    jwtInput.value = rawJwt;
+    // The SDK doesn't always surface raw_jwt in the WebSocket bundle, but
+    // link_uuid is the canonical identifier the webhook keys on. Prefer the
+    // signed JWT when available; fall back to the link_uuid so the
+    // submission always carries a reference an operator can look up.
+    jwtInput.value = rawJwt ?? linkUuid;
 
     try {
       const fd = new FormData(form);
@@ -108,6 +123,26 @@ export function PolyguardSubmitButton({ formContainerRef, onSubmitted }: Props) 
     }
 
     onSubmitted();
+  }
+
+  if (phase.name === 'needs-fields') {
+    return (
+      <div className="flex flex-col items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-900">
+        <div>
+          <p className="font-medium">Please complete all required fields first.</p>
+          <p className="mt-1 text-sm">
+            Still needed: <strong>{phase.missingLabel}</strong>.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setPhase({ name: 'idle' })}
+          className="rounded-md bg-amber-900 px-4 py-2 text-sm font-medium text-white hover:bg-amber-800"
+        >
+          Got it
+        </button>
+      </div>
+    );
   }
 
   if (phase.name === 'failed') {
@@ -156,6 +191,79 @@ function findForm(container: HTMLElement | null): HTMLFormElement | null {
     container.querySelector<HTMLFormElement>('form.jotform-form') ??
     container.querySelector<HTMLFormElement>('form')
   );
+}
+
+/**
+ * Jotform doesn't use HTML5 `required` — it marks required fields with
+ * `class="validate[required]"` (its own validator's hook) and runs the
+ * check in a script we don't execute. So `form.checkValidity()` always
+ * returns true. Re-implement the check here: walk every required field,
+ * group radio/checkbox by name, return the first one that's empty.
+ */
+function findFirstMissingRequiredField(
+  form: HTMLFormElement,
+): { element: HTMLElement; label: string } | null {
+  const requiredEls = Array.from(
+    form.querySelectorAll<HTMLElement>('[class*="validate[required]" i]'),
+  );
+  // Avoid validating a single radio/checkbox in a group more than once.
+  const checkedGroups = new Set<string>();
+
+  for (const el of requiredEls) {
+    const input = el as HTMLInputElement & {
+      type?: string;
+      name?: string;
+      value?: string;
+    };
+    if (
+      input.name &&
+      (input.name.includes('polyguard_jwt') || input.name.includes('polyguard'))
+    ) {
+      // Set programmatically after Trust Check; not user input.
+      continue;
+    }
+
+    if (input.type === 'radio' || input.type === 'checkbox') {
+      const group = input.name || input.id || '';
+      if (!group || checkedGroups.has(group)) continue;
+      checkedGroups.add(group);
+      const anyChecked = form.querySelector(
+        `input[name="${cssEscape(group)}"]:checked`,
+      );
+      if (!anyChecked) {
+        return { element: input, label: labelFor(form, input) };
+      }
+      continue;
+    }
+
+    const value = (input.value ?? '').trim();
+    if (!value) {
+      return { element: input, label: labelFor(form, input) };
+    }
+  }
+
+  return null;
+}
+
+function labelFor(form: HTMLFormElement, input: HTMLElement): string {
+  // 1. Walk up to the field container Jotform wraps each question in.
+  //    The label text sits inside `.form-label`.
+  const container = input.closest('li, .form-line');
+  const labelEl =
+    container?.querySelector<HTMLElement>('.form-label, label') ??
+    form.querySelector<HTMLElement>(
+      `label[for="${cssEscape((input as HTMLInputElement).id ?? '')}"]`,
+    );
+  const text = labelEl?.textContent?.replace(/\s+/g, ' ').trim();
+  if (text) return text.replace(/\*$/, '').trim();
+  return (input as HTMLInputElement).name || 'a required field';
+}
+
+function cssEscape(s: string): string {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+    return CSS.escape(s);
+  }
+  return s.replace(/(["\\])/g, '\\$1');
 }
 
 /**

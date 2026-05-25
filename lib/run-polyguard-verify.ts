@@ -18,7 +18,13 @@ export class PolyguardCancelled extends Error {
 
 export type ApplicationVerifyResult = {
   linkUuid: string;
-  rawJwt: string;
+  /**
+   * The signed JWT string from the verification bundle, if the SDK
+   * surfaced one in the WebSocket response. Not all SDK versions /
+   * proof sets include it. Treat `link_uuid` as the canonical identifier
+   * for the verification — `raw_jwt` is opportunistic.
+   */
+  rawJwt: string | null;
   bundle: PolyguardJwtBundle;
 };
 
@@ -63,10 +69,8 @@ export async function runPolyguardVerify(): Promise<ApplicationVerifyResult> {
     );
   }
 
-  const rawJwt = typeof bundle.raw_jwt === 'string' ? bundle.raw_jwt : '';
-  if (!rawJwt) {
-    throw new Error('Polyguard verification bundle missing raw_jwt');
-  }
+  const rawJwt =
+    typeof bundle.raw_jwt === 'string' && bundle.raw_jwt ? bundle.raw_jwt : null;
 
   return { linkUuid, rawJwt, bundle };
 }
