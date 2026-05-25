@@ -40,12 +40,12 @@ export async function fetchJotformHtml(formId: string): Promise<string | null> {
     return null;
   }
 
-  const head = html.match(/<head[^>]*>([\s\S]*?)<\/head>/)?.[1] ?? '';
-  const links = head.match(/<link\b[^>]*rel="stylesheet"[^>]*>/g) ?? [];
-  const styles = head.match(/<style\b[^>]*>[\s\S]*?<\/style>/g) ?? [];
+  const head = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i)?.[1] ?? '';
+  const links = head.match(/<link\b[^>]*rel="stylesheet"[^>]*>/gi) ?? [];
+  const styles = head.match(/<style\b[^>]*>[\s\S]*?<\/style>/gi) ?? [];
 
   const formMatch = html.match(
-    /<form\b[^>]*class="[^"]*jotform-form[^"]*"[^>]*>[\s\S]*?<\/form>/,
+    /<form\b[^>]*class="[^"]*jotform-form[^"]*"[^>]*>[\s\S]*?<\/form>/i,
   );
   if (!formMatch || formMatch.index === undefined) return null;
   const form = formMatch[0];
@@ -56,9 +56,12 @@ export async function fetchJotformHtml(formId: string): Promise<string | null> {
   // `<head>` and at the top of `<body>` — *before* the form. Collect
   // every `<script>` that appears before the form so those loaders run
   // first; otherwise the browser parses the inline scripts and throws
-  // `ReferenceError: JotForm is not defined`.
+  // `ReferenceError: JotForm is not defined`. The `i` flag matches
+  // case variants (`<SCRIPT>` etc.) and silences CodeQL's generic
+  // `js/bad-tag-filter` rule, even though we're extracting (not
+  // sanitizing) tags here.
   const scriptsBefore =
-    html.slice(0, formMatch.index).match(/<script\b[^>]*>[\s\S]*?<\/script>/g) ?? [];
+    html.slice(0, formMatch.index).match(/<script\b[^>]*>[\s\S]*?<\/script>/gi) ?? [];
 
   // Hide every native-submit path *before* JS has a chance to run, so
   // there's no window between SSR paint and `JobApplicationForm`'s
