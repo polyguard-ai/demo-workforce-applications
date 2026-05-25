@@ -75,6 +75,19 @@ export async function runPolyguardVerify(): Promise<ApplicationVerifyResult> {
 
   const linkUuid = extractLinkUuid(response);
   if (!linkUuid) {
+    // Ship the bundle to the server so we can inspect its actual shape
+    // in Vercel logs without asking the user to copy/paste from DevTools.
+    // The endpoint redacts verification claims before logging.
+    try {
+      await fetch('/api/debug-bundle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(response),
+        keepalive: true,
+      });
+    } catch {
+      // Best-effort; don't block the error path on diagnostics.
+    }
     throw new Error(
       'Polyguard verification bundle missing redirect_url; could not derive link_uuid',
     );
