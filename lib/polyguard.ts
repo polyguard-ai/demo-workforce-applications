@@ -71,14 +71,17 @@ declare global {
 }
 
 /**
- * Proof set for a job application: authentic identity (name), live
- * on-device presence, attested hardware, and administrative region. This
- * is the bar that prevents an attacker from completing the application
- * with stolen documents, a re-streamed face, or a spoofed location.
+ * Proof set Polyguard Mobile must satisfy before the application is
+ * accepted. Defaults to `pg_presence` only — the universally-available
+ * "real person, real device" proof — so the demo works against any
+ * enrolled mobile account. Set `NEXT_PUBLIC_POLYGUARD_REQUIRED_PROOFS`
+ * (comma-separated) to raise the bar — e.g.
+ * `name,pg_presence,pg_attestation_key_id,pg_region` for a full
+ * production-grade workforce check.
  */
-export const REQUIRED_PROOFS_FOR_APPLICATION = [
-  'name',
-  'pg_presence',
-  'pg_attestation_key_id',
-  'pg_region',
-];
+export const REQUIRED_PROOFS_FOR_APPLICATION = (
+  process.env.NEXT_PUBLIC_POLYGUARD_REQUIRED_PROOFS || 'pg_presence'
+)
+  .split(',')
+  .map((p) => p.trim())
+  .filter(Boolean);

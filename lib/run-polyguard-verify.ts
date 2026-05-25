@@ -62,6 +62,17 @@ export async function runPolyguardVerify(): Promise<ApplicationVerifyResult> {
     throw new Error(offlineMsg || 'Polyguard returned no verification bundle');
   }
 
+  if (bundle.status === 'failure') {
+    // Mobile rejected the request — usually because the user's account
+    // can't satisfy a required proof (e.g. no verified name on file, no
+    // hardware attestation). Surface the reason verbatim if Polyguard
+    // gave one; otherwise a generic prompt.
+    throw new Error(
+      bundle.reason ||
+        'Polyguard Mobile could not satisfy the required identity proofs for this application.',
+    );
+  }
+
   const linkUuid = extractLinkUuid(response);
   if (!linkUuid) {
     throw new Error(
