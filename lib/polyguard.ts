@@ -43,11 +43,27 @@ export type PolyguardVerifyResponse = {
   [k: string]: unknown;
 };
 
+/**
+ * Returns the link_uuid embedded in the SDK's resolved `redirect_url`.
+ *
+ * The historical shape was `/success/<link_uuid>`. The current SDK emits
+ * a longer path (e.g. `/success/by-app/<app_id>/<link_uuid>`), so we
+ * extract the *last* non-empty path segment rather than the first segment
+ * after `/success/`. That's robust to further path-shape changes as long
+ * as the uuid stays at the tail.
+ */
 export function extractLinkUuid(response: PolyguardVerifyResponse): string | undefined {
   const redirect = response?.jwt?.redirect_url;
   if (!redirect || typeof redirect !== 'string') return undefined;
-  const m = redirect.match(/\/success\/([^/?#]+)/);
-  return m?.[1];
+  let pathname = redirect;
+  try {
+    pathname = new URL(redirect, 'https://placeholder.invalid').pathname;
+  } catch {
+    // Not a URL — fall through and treat the string as a bare path.
+    pathname = redirect.split('?')[0]!.split('#')[0]!;
+  }
+  const segments = pathname.split('/').filter(Boolean);
+  return segments[segments.length - 1];
 }
 
 export type PolyguardClientConstructor = new (config: {
