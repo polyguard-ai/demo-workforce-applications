@@ -13,9 +13,18 @@ type Phase =
   | { name: 'submitting' }
   | { name: 'failed'; reason: string };
 
+export type VerifiedIdentity = {
+  linkUuid: string;
+  fullName?: string;
+  region?: string;
+  documentType?: string;
+  issuingCountry?: string;
+  verifiedAt?: number;
+};
+
 type Props = {
   formContainerRef: RefObject<HTMLDivElement | null>;
-  onSubmitted: () => void;
+  onSubmitted: (verified: VerifiedIdentity) => void;
 };
 
 const POLL_INTERVAL_MS = 1000;
@@ -105,11 +114,33 @@ export function PolyguardSubmitButton({ formContainerRef, onSubmitted }: Props) 
       });
       return;
     }
-    // The SDK doesn't always surface raw_jwt in the WebSocket bundle, but
-    // link_uuid is the canonical identifier the webhook keys on. Prefer the
-    // signed JWT when available; fall back to the link_uuid so the
-    // submission always carries a reference an operator can look up.
-    jwtInput.value = rawJwt ?? linkUuid;
+
+    // The webhook payload carries server-verified identity claims. Pack
+    // the meaningful ones into a JSON blob alongside the link_uuid so the
+    // recruiter reading the Jotform Inbox can see *who* verified, not
+    // just an opaque identifier. The raw_jwt (when surfaced by the SDK)
+    // goes in too so a downstream system that wants signature-verified
+    // claims can re-derive them from JWKS.
+    const verification = webhook.data?.verification ?? {};
+    const verified: VerifiedIdentity = {
+      linkUuid,
+      fullName: typeof verification.full_name === 'string' ? verification.full_name : undefined,
+      region: typeof verification.region === 'string' ? verification.region : undefined,
+      documentType: typeof verification.document_type === 'string' ? verification.document_type : undefined,
+      issuingCountry: typeof verification.issuing_country === 'string' ? verification.issuing_country : undefined,
+      verifiedAt: webhook.timestamp,
+    };
+
+    jwtInput.value = JSON.stringify({
+      link_uuid: verified.linkUuid,
+      status: webhook.event,
+      verified_at: verified.verifiedAt,
+      verified_name: verified.fullName,
+      verified_region: verified.region,
+      verified_document_type: verified.documentType,
+      verified_issuing_country: verified.issuingCountry,
+      raw_jwt: rawJwt ?? undefined,
+    });
 
     try {
       const fd = new FormData(form);
@@ -122,7 +153,7 @@ export function PolyguardSubmitButton({ formContainerRef, onSubmitted }: Props) 
       return;
     }
 
-    onSubmitted();
+    onSubmitted(verified);
   }
 
   if (phase.name === 'needs-fields') {
@@ -279,17 +310,29 @@ function findPolyguardJwtInput(form: HTMLFormElement): HTMLInputElement | null {
   );
 }
 
-async function pollForWebhook(linkUuid: string) {
+type WebhookPayload = {
+  event: 'trust_check.completed' | 'trust_check.failed';
+  timestamp?: number;
+  data?: {
+    reason?: string | null;
+    verification?: {
+      full_name?: string;
+      region?: string;
+      document_type?: string;
+      issuing_country?: string;
+      [k: string]: unknown;
+    };
+  };
+};
+
+async function pollForWebhook(linkUuid: string): Promise<WebhookPayload> {
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const res = await fetch(`/api/status/${encodeURIComponent(linkUuid)}`, {
       cache: 'no-store',
     });
     if (res.status === 200) {
-      return (await res.json()) as {
-        event: 'trust_check.completed' | 'trust_check.failed';
-        data?: { reason?: string | null };
-      };
+      return (await res.json()) as WebhookPayload;
     }
     if (res.status !== 204) {
       throw new Error(`Status endpoint returned ${res.status}`);
