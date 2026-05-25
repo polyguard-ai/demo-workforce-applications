@@ -74,12 +74,24 @@ export function extractLinkUuid(
 ): string | undefined {
   const redirect = response?.jwt?.redirect_url;
   if (!redirect || typeof redirect !== 'string') return undefined;
-  let pathname = redirect;
+
+  // Today's SDK emits the uuid as a query param:
+  //   https://api-oregon.polyguard.ai/success/by-app/<app_id>?link_uuid=<uuid>
+  // Try the obvious place first.
+  let pathname = '';
   try {
-    pathname = new URL(redirect, 'https://placeholder.invalid').pathname;
+    const url = new URL(redirect, 'https://placeholder.invalid');
+    const fromQuery = url.searchParams.get('link_uuid');
+    if (fromQuery) return fromQuery;
+    pathname = url.pathname;
   } catch {
     pathname = redirect.split('?')[0]!.split('#')[0]!;
   }
+
+  // Fallback for the legacy / future path-only shapes
+  // (`/success/<uuid>` or `/success/by-app/<uuid>/<app_id>`): walk the
+  // path and return the first segment that isn't structural and isn't
+  // the app_id.
   const segments = pathname.split('/').filter(Boolean);
   for (const seg of segments) {
     if (STRUCTURAL_PATH_SEGMENTS.has(seg)) continue;
