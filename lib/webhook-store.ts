@@ -8,16 +8,19 @@ import type { WebhookInner } from './webhook-crypto';
  * serverless function and the client poll lands in a different one, so a
  * module-scoped Map is invisible across them.
  *
- * Local development: if the Upstash env vars are absent we fall back to an
+ * Local development: if no Redis env vars are present we fall back to an
  * in-process Map, which works fine because `next dev` is a single process.
  *
- * Required env vars (production):
- *   UPSTASH_REDIS_REST_URL
- *   UPSTASH_REDIS_REST_TOKEN
+ * Env var names: Vercel's Marketplace integration for Upstash injects
+ * `KV_REST_API_URL` / `KV_REST_API_TOKEN` (inherited from the legacy
+ * Vercel KV product). A manual Upstash setup uses
+ * `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`. Accept either.
  */
 
-const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL;
-const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+const REDIS_URL =
+  process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL;
+const REDIS_TOKEN =
+  process.env.KV_REST_API_TOKEN ?? process.env.UPSTASH_REDIS_REST_TOKEN;
 const TTL_SECONDS = 60 * 30;
 const KEY_PREFIX = 'workforce-applications:webhook:';
 
