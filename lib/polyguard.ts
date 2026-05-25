@@ -46,24 +46,47 @@ export type PolyguardVerifyResponse = {
 /**
  * Returns the link_uuid embedded in the SDK's resolved `redirect_url`.
  *
- * The historical shape was `/success/<link_uuid>`. The current SDK emits
- * a longer path (e.g. `/success/by-app/<app_id>/<link_uuid>`), so we
- * extract the *last* non-empty path segment rather than the first segment
- * after `/success/`. That's robust to further path-shape changes as long
- * as the uuid stays at the tail.
+ * The path shape has changed twice during this demo's lifetime:
+ *   - Historical: `/success/<link_uuid>`
+ *   - Current:    `/success/by-app/<link_uuid>/<app_id>`
+ *
+ * Neither "first segment after /success/" nor "last path segment" works
+ * across both. Instead, walk the path and return the first segment that
+ * isn't a known structural word and isn't the configured app_id. That
+ * lands on the link_uuid regardless of where in the path it sits.
+ *
+ * A skip-set of literal structural segments keeps this resilient to
+ * future tail/middle reorderings; expand it if the SDK introduces new
+ * ones.
  */
-export function extractLinkUuid(response: PolyguardVerifyResponse): string | undefined {
+const STRUCTURAL_PATH_SEGMENTS = new Set([
+  'success',
+  'by-app',
+  'verify',
+  'v',
+  'v1',
+  'v2',
+]);
+
+export function extractLinkUuid(
+  response: PolyguardVerifyResponse,
+  appId: string = POLYGUARD_APP_ID,
+): string | undefined {
   const redirect = response?.jwt?.redirect_url;
   if (!redirect || typeof redirect !== 'string') return undefined;
   let pathname = redirect;
   try {
     pathname = new URL(redirect, 'https://placeholder.invalid').pathname;
   } catch {
-    // Not a URL — fall through and treat the string as a bare path.
     pathname = redirect.split('?')[0]!.split('#')[0]!;
   }
   const segments = pathname.split('/').filter(Boolean);
-  return segments[segments.length - 1];
+  for (const seg of segments) {
+    if (STRUCTURAL_PATH_SEGMENTS.has(seg)) continue;
+    if (appId && seg === appId) continue;
+    return seg;
+  }
+  return undefined;
 }
 
 export type PolyguardClientConstructor = new (config: {
