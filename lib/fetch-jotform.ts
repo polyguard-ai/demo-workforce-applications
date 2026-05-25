@@ -60,10 +60,26 @@ export async function fetchJotformHtml(formId: string): Promise<string | null> {
   const scriptsBefore =
     html.slice(0, formMatch.index).match(/<script\b[^>]*>[\s\S]*?<\/script>/g) ?? [];
 
+  // Hide every native-submit path *before* JS has a chance to run, so
+  // there's no window between SSR paint and `JobApplicationForm`'s
+  // hydration effect where a candidate could click the native submit
+  // and bypass Polyguard. The effect then layers stronger defenses
+  // on top (type="button", disabled, submit-event blocker, .submit()
+  // override). See `components/JobApplicationForm.tsx`.
+  const armor = `<style>
+    form.jotform-form button[type="submit"],
+    form.jotform-form input[type="submit"],
+    form.jotform-form button:not([type]),
+    form.jotform-form .form-submit-button,
+    form.jotform-form .form-submit-button-container {
+      display: none !important;
+    }
+  </style>`;
+
   // Rewrite protocol-relative font URLs (`//cdn.jotfor.ms/...`) so the
   // browser picks https — Jotform sometimes serves them protocol-relative
   // and that fails on https pages without quirks.
-  const resolved = [...links, ...styles, ...scriptsBefore, form]
+  const resolved = [...links, ...styles, armor, ...scriptsBefore, form]
     .join('\n')
     .replace(/(href|src)="\/\//g, '$1="https://');
 

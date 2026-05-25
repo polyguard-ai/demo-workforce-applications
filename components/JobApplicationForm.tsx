@@ -21,14 +21,74 @@ export function JobApplicationForm({ formHtml }: Props) {
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    // Hide Jotform's native submit. The candidate's only path forward is
-    // the page-level "Submit with Polyguard" button.
+    const form = container.querySelector<HTMLFormElement>('form.jotform-form, form');
+    if (!form) return;
+
+    // Lock every path a candidate could use to submit *without*
+    // completing a Polyguard Trust Check. The only authorized path is
+    // `PolyguardSubmitButton`'s click handler, which builds FormData
+    // and POSTs to `form.action` via fetch after a successful verify.
+    //
+    // We can't stop a determined attacker who opens DevTools and POSTs
+    // to `form.action` themselves — that's outside our control, and the
+    // recruiter is expected to verify the `raw_jwt` signature against
+    // Polyguard's JWKS server-side — but we close every accidental,
+    // implicit, and casual-tamper path.
+
+    // (a) Disarm every submit-eligible element: hide it, change its
+    //     `type` so Enter-key implicit submission has no default button
+    //     to fire, and `disabled` it so a scripted `.click()` is inert.
     const submits = container.querySelectorAll<HTMLElement>(
-      'button[type="submit"], input[type="submit"], .form-submit-button, .form-submit-button-container',
+      [
+        'button[type="submit"]',
+        'input[type="submit"]',
+        'button:not([type])', // bare <button> defaults to type=submit per HTML spec
+        '.form-submit-button',
+        '.form-submit-button-container',
+      ].join(', '),
     );
     submits.forEach((el) => {
       el.style.display = 'none';
+      if (el instanceof HTMLButtonElement || el instanceof HTMLInputElement) {
+        el.type = 'button';
+        el.disabled = true;
+      }
     });
+
+    // (b) Cancel any submit event that fires anyway — implicit
+    //     submission via Enter, Jotform's own JS dispatching submit,
+    //     or anything we haven't anticipated. Our own POST goes
+    //     through `fetch` + FormData and never dispatches submit.
+    const blockSubmit = (e: SubmitEvent) => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    form.addEventListener('submit', blockSubmit, true);
+
+    // (c) Override `form.submit()`. The imperative method bypasses the
+    //     submit event entirely (per HTML spec), so the listener above
+    //     can't catch it. Throwing here neutralizes Jotform's own JS
+    //     calling `.submit()` and a casual `document.forms[0].submit()`
+    //     from the console.
+    const originalSubmit = form.submit.bind(form);
+    form.submit = () => {
+      throw new Error('Form submission is gated by Polyguard.');
+    };
+
+    // (d) Wipe any prefilled `polyguard_jwt`. Jotform's JS reads URL
+    //     parameters and populates matching field names, so a candidate
+    //     arriving at `/?polyguard_jwt=forged` would otherwise have a
+    //     pre-poisoned value sitting in the field before our flow
+    //     overwrites it.
+    const jwtInput = form.querySelector<HTMLInputElement>(
+      'input[name*="polyguard_jwt" i], input[name*="polyguardJwt" i], input[name*="polyguard" i]',
+    );
+    if (jwtInput) jwtInput.value = '';
+
+    return () => {
+      form.removeEventListener('submit', blockSubmit, true);
+      form.submit = originalSubmit;
+    };
   }, [formHtml]);
 
   if (submitted) {
