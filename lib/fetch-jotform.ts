@@ -5,8 +5,10 @@
  * HTML anymore — it returns a `FrameBuilder` class that constructs an
  * iframe at runtime. To stay iframe-free we instead fetch the full
  * Jotform-rendered form page at `https://form.jotform.com/<id>` and
- * extract the `<form>` element plus the stylesheet `<link>`s and inline
- * `<style>` blocks it depends on for styling.
+ * extract the `<form>` element plus the assets it depends on:
+ * stylesheet `<link>`s, inline `<style>` blocks, and every `<script>`
+ * that appears before the form (which is where Jotform defines the
+ * `JotForm` global the form's own inline scripts call into).
  *
  * The form's `action` attribute already points at
  * `https://submit.jotform.com/submit/<id>`, so when we set the
@@ -41,15 +43,27 @@ export async function fetchJotformHtml(formId: string): Promise<string | null> {
   const head = html.match(/<head[^>]*>([\s\S]*?)<\/head>/)?.[1] ?? '';
   const links = head.match(/<link\b[^>]*rel="stylesheet"[^>]*>/g) ?? [];
   const styles = head.match(/<style\b[^>]*>[\s\S]*?<\/style>/g) ?? [];
-  const form = html.match(
+
+  const formMatch = html.match(
     /<form\b[^>]*class="[^"]*jotform-form[^"]*"[^>]*>[\s\S]*?<\/form>/,
-  )?.[0];
-  if (!form) return null;
+  );
+  if (!formMatch || formMatch.index === undefined) return null;
+  const form = formMatch[0];
+
+  // The form body contains inline `<script>JotForm.foo(...)</script>`
+  // blocks that reference a `JotForm` global. Jotform sets that global
+  // up in loader `<script src="…/jotform.forms.js">` tags that live in
+  // `<head>` and at the top of `<body>` — *before* the form. Collect
+  // every `<script>` that appears before the form so those loaders run
+  // first; otherwise the browser parses the inline scripts and throws
+  // `ReferenceError: JotForm is not defined`.
+  const scriptsBefore =
+    html.slice(0, formMatch.index).match(/<script\b[^>]*>[\s\S]*?<\/script>/g) ?? [];
 
   // Rewrite protocol-relative font URLs (`//cdn.jotfor.ms/...`) so the
   // browser picks https — Jotform sometimes serves them protocol-relative
   // and that fails on https pages without quirks.
-  const resolved = [...links, ...styles, form]
+  const resolved = [...links, ...styles, ...scriptsBefore, form]
     .join('\n')
     .replace(/(href|src)="\/\//g, '$1="https://');
 
