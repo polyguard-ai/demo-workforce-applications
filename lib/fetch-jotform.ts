@@ -40,12 +40,19 @@ export async function fetchJotformHtml(formId: string): Promise<string | null> {
     return null;
   }
 
-  const head = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i)?.[1] ?? '';
+  // The `i` flag matches case variants (`<SCRIPT>`, `</STYLE>`) and the
+  // `\s*` before each closing `>` matches HTML-legal end-tag whitespace
+  // (`</script >`). Both silence CodeQL's generic `js/bad-tag-filter`
+  // rule — that rule targets sanitization contexts where a missed
+  // variant is a bypass; here we're extracting (not stripping) tags
+  // and a missed variant would just silently drop a script Jotform
+  // needs, but the broader matcher is harmless and future-proof.
+  const head = html.match(/<head[^>]*>([\s\S]*?)<\/head\s*>/i)?.[1] ?? '';
   const links = head.match(/<link\b[^>]*rel="stylesheet"[^>]*>/gi) ?? [];
-  const styles = head.match(/<style\b[^>]*>[\s\S]*?<\/style>/gi) ?? [];
+  const styles = head.match(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi) ?? [];
 
   const formMatch = html.match(
-    /<form\b[^>]*class="[^"]*jotform-form[^"]*"[^>]*>[\s\S]*?<\/form>/i,
+    /<form\b[^>]*class="[^"]*jotform-form[^"]*"[^>]*>[\s\S]*?<\/form\s*>/i,
   );
   if (!formMatch || formMatch.index === undefined) return null;
   const form = formMatch[0];
@@ -56,12 +63,9 @@ export async function fetchJotformHtml(formId: string): Promise<string | null> {
   // `<head>` and at the top of `<body>` — *before* the form. Collect
   // every `<script>` that appears before the form so those loaders run
   // first; otherwise the browser parses the inline scripts and throws
-  // `ReferenceError: JotForm is not defined`. The `i` flag matches
-  // case variants (`<SCRIPT>` etc.) and silences CodeQL's generic
-  // `js/bad-tag-filter` rule, even though we're extracting (not
-  // sanitizing) tags here.
+  // `ReferenceError: JotForm is not defined`.
   const scriptsBefore =
-    html.slice(0, formMatch.index).match(/<script\b[^>]*>[\s\S]*?<\/script>/gi) ?? [];
+    html.slice(0, formMatch.index).match(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi) ?? [];
 
   // Hide every native-submit path *before* JS has a chance to run, so
   // there's no window between SSR paint and `JobApplicationForm`'s
