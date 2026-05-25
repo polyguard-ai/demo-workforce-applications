@@ -25,7 +25,9 @@ export async function fetchJotformHtml(formId: string): Promise<string | null> {
       'User-Agent':
         'Mozilla/5.0 (compatible; demo-workforce-applications/1.0; +https://github.com/polyguard-ai/demo-workforce-applications)',
     },
-    next: { revalidate: 3600 },
+    // Always fetch fresh: the operator is actively iterating on the form
+    // in Jotform's builder, and a 1-hour ISR window hides their edits.
+    cache: 'no-store',
   });
   if (!res.ok) {
     throw new Error(`Jotform returned ${res.status} for form ${formId}`);
