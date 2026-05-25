@@ -1,73 +1,55 @@
-import vm from 'node:vm';
-
 /**
- * Jotform's JS Embed endpoint at `https://form.jotform.com/jsform/<FORM_ID>`
- * returns JavaScript that calls `document.write(...)` to inject the form's
- * HTML into the host page. We can't run that in React (`document.write`
- * after page load would wipe the document), so we execute the script
- * server-side in a `vm` sandbox, capture every write into a string, and
- * hand the resulting HTML to a client component which injects it via
- * `dangerouslySetInnerHTML`.
+ * Pulls a Jotform-built form into our page as same-origin HTML.
  *
- * The result is a *same-origin* form: we own the DOM, so we can find the
- * `polyguard_jwt` input, set its value once the Trust Check passes, and
- * submit the form — no cross-origin postMessage, no Custom Code paste
- * inside Jotform.
+ * Jotform's JS Embed endpoint (`/jsform/<id>`) doesn't return inline form
+ * HTML anymore — it returns a `FrameBuilder` class that constructs an
+ * iframe at runtime. To stay iframe-free we instead fetch the full
+ * Jotform-rendered form page at `https://form.jotform.com/<id>` and
+ * extract the `<form>` element plus the stylesheet `<link>`s and inline
+ * `<style>` blocks it depends on for styling.
  *
- * Returns the assembled HTML on success. Returns `null` if Jotform serves
- * its missing-form fallback (which means the form ID is wrong / unpublished).
- * Throws on network errors so the page can render a clear error state.
+ * The form's `action` attribute already points at
+ * `https://submit.jotform.com/submit/<id>`, so when we set the
+ * `polyguard_jwt` input and POST the form, the submission lands in the
+ * Jotform Inbox exactly as a native submit would.
+ *
+ * Returns the assembled HTML, or `null` if the form ID is missing /
+ * unpublished. Throws on network errors so the page can render a clear
+ * error state.
  */
 export async function fetchJotformHtml(formId: string): Promise<string | null> {
-  const url = `https://form.jotform.com/jsform/${encodeURIComponent(formId)}`;
+  const url = `https://form.jotform.com/${encodeURIComponent(formId)}`;
   const res = await fetch(url, {
     headers: {
-      // Jotform serves a stripped response to unknown UAs.
+      // Jotform serves a stripped response to unknown user agents.
       'User-Agent':
         'Mozilla/5.0 (compatible; demo-workforce-applications/1.0; +https://github.com/polyguard-ai/demo-workforce-applications)',
     },
-    // Cache for an hour; the form's structure doesn't change minute-to-minute.
     next: { revalidate: 3600 },
   });
   if (!res.ok) {
-    throw new Error(`Jotform jsform endpoint returned ${res.status}`);
+    throw new Error(`Jotform returned ${res.status} for form ${formId}`);
   }
-  const script = await res.text();
+  const html = await res.text();
 
-  if (script.includes('missing-form')) {
-    // Jotform's fallback when the form ID is unknown or unpublished.
+  if (html.includes('missing-form') || !html.includes('jotform-form')) {
     return null;
   }
 
-  // Run the script with a mocked document/window. The only API we care
-  // about is `document.write` / `document.writeln`; everything else is a
-  // no-op so the script can't crash the request.
-  let html = '';
-  const noop = () => {};
-  const docProxy: ProxyHandler<object> = {
-    get(_, key) {
-      if (key === 'write' || key === 'writeln') {
-        return (s: unknown) => {
-          html += String(s ?? '');
-        };
-      }
-      return noop;
-    },
-  };
-  const sandbox: Record<string, unknown> = {};
-  sandbox.document = new Proxy({}, docProxy);
-  sandbox.window = sandbox;
-  sandbox.self = sandbox;
-  sandbox.navigator = { userAgent: 'mock' };
-  sandbox.location = { href: 'about:blank', host: '', protocol: 'https:' };
+  const head = html.match(/<head[^>]*>([\s\S]*?)<\/head>/)?.[1] ?? '';
+  const links = head.match(/<link\b[^>]*rel="stylesheet"[^>]*>/g) ?? [];
+  const styles = head.match(/<style\b[^>]*>[\s\S]*?<\/style>/g) ?? [];
+  const form = html.match(
+    /<form\b[^>]*class="[^"]*jotform-form[^"]*"[^>]*>[\s\S]*?<\/form>/,
+  )?.[0];
+  if (!form) return null;
 
-  try {
-    vm.createContext(sandbox);
-    vm.runInContext(script, sandbox, { timeout: 5000 });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to evaluate Jotform jsform script: ${msg}`);
-  }
+  // Rewrite protocol-relative font URLs (`//cdn.jotfor.ms/...`) so the
+  // browser picks https — Jotform sometimes serves them protocol-relative
+  // and that fails on https pages without quirks.
+  const resolved = [...links, ...styles, form]
+    .join('\n')
+    .replace(/(href|src)="\/\//g, '$1="https://');
 
-  return html || null;
+  return resolved;
 }
