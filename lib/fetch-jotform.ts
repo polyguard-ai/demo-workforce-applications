@@ -74,12 +74,23 @@ export async function fetchJotformHtml(formId: string): Promise<string | null> {
   // and bypass Polyguard. The effect then layers stronger defenses
   // on top (type="button", disabled, submit-event blocker, .submit()
   // override). See `components/JobApplicationForm.tsx`.
+  //
+  // The footer rules suppress Jotform's "Powered by Jotform" bar
+  // (`for-form-branding-footer.js`), which is appended to `document.body`
+  // or the form and overlays our own footer and Submit button. This keeps
+  // it from flashing in before `JobApplicationForm` removes it from the
+  // DOM; these classes are unscoped because the bar lands outside the form.
   const armor = `<style>
     form.jotform-form button[type="submit"],
     form.jotform-form input[type="submit"],
     form.jotform-form button:not([type]),
     form.jotform-form .form-submit-button,
     form.jotform-form .form-submit-button-container {
+      display: none !important;
+    }
+    .formFooter-wrapper,
+    .formFooter,
+    .formFooter-heightMask {
       display: none !important;
     }
   </style>`;
