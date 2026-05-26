@@ -241,6 +241,13 @@ function findFirstMissingRequiredField(
   const checkedGroups = new Set<string>();
 
   for (const el of requiredEls) {
+    // Jotform's `setConditions` hides irrelevant questions by
+    // display:none-ing the wrapping `.form-line`. `offsetParent === null`
+    // catches that (display:none on the element itself or any ancestor).
+    // Skip — the candidate can't fill in a question they can't see, and
+    // forcing them to would deadlock the Trust Check.
+    if (el.offsetParent === null) continue;
+
     const input = el as HTMLInputElement & {
       type?: string;
       name?: string;
