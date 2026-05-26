@@ -91,6 +91,51 @@ export function JobApplicationForm({ formHtml }: Props) {
     };
   }, [formHtml]);
 
+  // Jotform's branding-footer loader (`for-form-branding-footer.js`, now
+  // pulled in with the form's other scripts) injects a "Powered by Jotform"
+  // bar: a `div.formFooter-wrapper` appended to `document.body` or the form,
+  // wrapping a fixed `.formFooter` plus a `.formFooter-heightMask` spacer. It
+  // overlays our own footer and the Submit button. The script runs around
+  // DOMContentLoaded, which can land before or after this effect, so sweep
+  // once on mount and then watch for it being (re)added to the DOM.
+  useEffect(() => {
+    const FOOTER_SELECTOR =
+      '.formFooter-wrapper, .formFooter, .formFooter-heightMask';
+
+    const removeBrandingFooter = () => {
+      // The loader stores the root node it created here; drop it directly.
+      const known = (window as unknown as { brandingFooterElement?: unknown })
+        .brandingFooterElement;
+      if (known instanceof HTMLElement) known.remove();
+      // Fallback by class. `querySelectorAll` returns nodes in document
+      // order, so an ancestor is removed before its descendants and the
+      // later `.remove()` calls on now-detached nodes are harmless no-ops.
+      document
+        .querySelectorAll<HTMLElement>(FOOTER_SELECTOR)
+        .forEach((el) => el.remove());
+    };
+
+    removeBrandingFooter();
+
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (
+            node instanceof HTMLElement &&
+            (node.matches(FOOTER_SELECTOR) ||
+              node.querySelector(FOOTER_SELECTOR))
+          ) {
+            removeBrandingFooter();
+            return;
+          }
+        }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    return () => observer.disconnect();
+  }, []);
+
   if (submitted) {
     const v = submitted;
     return (
